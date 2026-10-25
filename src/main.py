@@ -12,6 +12,8 @@ from src.inference.visualization import draw_detections, draw_zone
 from src.zones.geometry import polygon_to_pixels
 from src.tracking.tracker import Tracker
 from src.events.event_engine import ZoneEventEngine
+from src.ppe.analyzer import check_ppe
+from src.events.ppe_events import PPEEventEngine
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 WINDOW_NAME = "Industrial Vision"
@@ -94,6 +96,32 @@ def main() -> None:
     connected = False
     retry_at = 0.0
 
+    ppe_config = config["ppe"]
+
+    ppe_model_path = Path(ppe_config["model_path"])
+
+    if not ppe_model_path.is_absolute():
+        ppe_model_path = PROJECT_ROOT / ppe_model_path
+
+    ppe_detector = Detector(
+        model_path=ppe_model_path,
+        confidence=float(ppe_config["confidence"]),
+        imgsz=int(ppe_config["imgsz"]),
+        device=str(model_config["device"]),
+        classes=[0, 1],
+    )
+
+    min_person_height = int(ppe_config["min_person_height"])
+
+    if min_person_height <= 0:
+        raise ValueError("ppe.min_person_height должен быть больше нуля")
+
+    ppe_events = PPEEventEngine(
+        n=int(ppe_config["confirmation_n"]),
+        m=int(ppe_config["confirmation_m"]),
+        cooldown_sec=float(event_config["cooldown_sec"]),
+    )
+
     logger.info("Запуск камеры %s", camera_config["id"])
 
     try:
@@ -115,6 +143,7 @@ def main() -> None:
                         connected = True
                         tracker.reset()
                         zone_events.reset()
+                        ppe_events.reset()
                         fps_meter.reset()
                         last_fps_log = time.perf_counter()
 
@@ -140,8 +169,44 @@ def main() -> None:
 
             try:
                 detections = tracker.update(frame)
+                equipment = []
+
+                frame_height, frame_width = frame.shape[:2]
+
+                for person in detections:
+                    if person.class_name != "person" or person.track_id is None:
+                        continue
+
+                    person_height = person.y2 - person.y1
+
+                    if person_height < min_person_height:
+                        continue
+
+                    # Немного расширяем область вокруг человека.
+                    padding = int(person_height * 0.10)
+
+                    x1 = max(0, person.x1 - padding)
+                    y1 = max(0, person.y1 - padding)
+                    x2 = min(frame_width, person.x2 + padding)
+                    y2 = min(frame_height, person.y2 + padding)
+
+                    crop = frame[y1:y2, x1:x2]
+
+                    if crop.size == 0:
+                        continue
+
+                    items = ppe_detector.predict(crop)
+
+                    # Возвращаем координаты рамок в систему полного кадра.
+                    for item in items:
+                        item.x1 += x1
+                        item.x2 += x1
+                        item.y1 += y1
+                        item.y2 += y1
+
+                    equipment.extend(items)
             except Exception:
-                logger.exception("Ошибка детекции и tracking")
+                logger.exception("Ошибка детекции, tracking или PPE-модели")
                 raise
 
             inference_ms = (
@@ -149,6 +214,21 @@ def main() -> None:
             ) * 1000
 
             height, width = frame.shape[:2]
+
+            ppe_results = check_ppe(
+                people=detections,
+                equipment=equipment,
+                min_person_height=min_person_height,
+                frame_height=height,
+            )
+
+            for event in ppe_events.update(ppe_results):
+                logger.warning(
+                    "Возможное нарушение СИЗ: %s | камера: %s | track_id: %d",
+                    event["event_type"],
+                    camera_config["id"],
+                    event["track_id"],
+                )
 
             polygon_px = polygon_to_pixels(
                 zone_polygon,
@@ -170,6 +250,31 @@ def main() -> None:
                 )
 
             draw_detections(frame, detections)
+            draw_detections(frame, equipment)
+            for result in ppe_results:
+                person = result["person"]
+
+                helmet_text = (
+                    "found" if result["has_helmet"] else "not found"
+                )
+
+                if result["has_vest"] is None:
+                    vest_text = "unknown"
+                else:
+                    vest_text = (
+                        "found" if result["has_vest"] else "not found"
+                    )
+
+                cv2.putText(
+                    frame,
+                    f"Helmet: {helmet_text} | Vest: {vest_text}",
+                    (person.x1, min(height - 10, person.y2 + 20)),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    (0, 255, 255),
+                    1,
+                )
+
             draw_zone(frame, detections, polygon_px)
 
             fps = fps_meter.tick()
@@ -178,7 +283,7 @@ def main() -> None:
             if now - last_fps_log >= 1.0:
                 logger.info(
                     "FPS обработки: %.1f | "
-                    "детекция и tracking: %.1f мс | "
+                    "детекция, tracking и PPE: %.1f мс | "
                     "объектов: %d",
                     fps,
                     inference_ms,
@@ -199,7 +304,7 @@ def main() -> None:
 
             cv2.putText(
                 frame,
-                f"Detect + Track: {inference_ms:.1f} ms | Objects: {len(detections)}",
+                f"AI: {inference_ms:.1f} ms | Objects: {len(detections)}",
                 (20, 75),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.7,

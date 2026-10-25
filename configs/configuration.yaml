@@ -1,6 +1,6 @@
 camera:
   id: cam_01
-  source: data/test1.mp4
+  source: data/test4.mp4
   reconnect_sec: 2
 
 models:
@@ -25,3 +25,11 @@ events:
 storage:
   root: events
   retention_days: 30
+
+ppe:
+  model_path: models/best.pt
+  confidence: 0.40
+  imgsz: 640
+  min_person_height: 120
+  confirmation_n: 5
+  confirmation_m: 7
