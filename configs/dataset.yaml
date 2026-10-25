@@ -1,2 +1,9 @@
-# Будет заполнен на этапе подготовки специализированного датасета.
-{}
+# Относительно корня проекта при запуске команды ниже.
+path: datasets/ppe
+train: images/train
+val: images/val
+test: images/test
+
+names:
+  0: helmet
+  1: vest

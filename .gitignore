@@ -11,3 +11,4 @@ events/
 logs/
 
 .env
+.ipynb_checkpoints/
