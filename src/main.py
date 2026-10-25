@@ -8,7 +8,10 @@ import cv2
 from src.capture.video_capture import VideoSource
 from src.monitoring.fps import FPSMeter
 from src.inference.detector import Detector
-from src.inference.visualization import draw_detections
+from src.inference.visualization import draw_detections, draw_zone
+from src.zones.geometry import polygon_to_pixels
+from src.tracking.tracker import Tracker
+from src.events.event_engine import ZoneEventEngine
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 WINDOW_NAME = "Industrial Vision"
@@ -43,6 +46,12 @@ def main() -> None:
     if reconnect_sec <= 0:
         raise ValueError("camera.reconnect_sec должен быть больше нуля")
 
+    zone_id = "restricted_01"
+    zone_polygon = config["zones"][zone_id]
+
+    if len(zone_polygon) < 3:
+        raise ValueError("Для зоны необходимо минимум три точки")
+
     # Относительный путь к видео считаем от корня проекта.
     if isinstance(source, str) and "://" not in source:
         source_path = Path(source)
@@ -67,6 +76,17 @@ def main() -> None:
     except Exception:
         logger.exception("Не удалось подготовить детектор")
         raise
+
+    tracker = Tracker(detector)
+
+    event_config = config["events"]
+
+    zone_events = ZoneEventEngine(
+        zone_id=zone_id,
+        confirmation_n=int(event_config["confirmation_n"]),
+        confirmation_m=int(event_config["confirmation_m"]),
+        cooldown_sec=float(event_config["cooldown_sec"]),
+    )
 
     video = VideoSource(source)
     fps_meter = FPSMeter()
@@ -93,6 +113,8 @@ def main() -> None:
                         )
                     else:
                         connected = True
+                        tracker.reset()
+                        zone_events.reset()
                         fps_meter.reset()
                         last_fps_log = time.perf_counter()
 
@@ -117,16 +139,38 @@ def main() -> None:
             inference_started = time.perf_counter()
 
             try:
-                detections = detector.predict(frame)
+                detections = tracker.update(frame)
             except Exception:
-                logger.exception("Ошибка обработки кадра детектором")
+                logger.exception("Ошибка детекции и tracking")
                 raise
 
             inference_ms = (
                 time.perf_counter() - inference_started
             ) * 1000
 
+            height, width = frame.shape[:2]
+
+            polygon_px = polygon_to_pixels(
+                zone_polygon,
+                width,
+                height,
+            )
+
+            events = zone_events.update(detections, polygon_px)
+
+            for event in events:
+                logger.warning(
+                    "Событие: %s | камера: %s | зона: %s | "
+                    "track_id: %d | confidence: %.2f",
+                    event["event_type"],
+                    camera_config["id"],
+                    event["zone_id"],
+                    event["track_id"],
+                    event["confidence"],
+                )
+
             draw_detections(frame, detections)
+            draw_zone(frame, detections, polygon_px)
 
             fps = fps_meter.tick()
             now = time.perf_counter()
@@ -134,7 +178,7 @@ def main() -> None:
             if now - last_fps_log >= 1.0:
                 logger.info(
                     "FPS обработки: %.1f | "
-                    "вызов детектора: %.1f мс | "
+                    "детекция и tracking: %.1f мс | "
                     "объектов: %d",
                     fps,
                     inference_ms,
@@ -155,7 +199,7 @@ def main() -> None:
 
             cv2.putText(
                 frame,
-                f"Detector: {inference_ms:.1f} ms | Objects: {len(detections)}",
+                f"Detect + Track: {inference_ms:.1f} ms | Objects: {len(detections)}",
                 (20, 75),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.7,

@@ -4,6 +4,7 @@ import cv2
 import numpy as np
 
 from src.inference.types import Detection
+from src.zones.geometry import bottom_center, point_in_polygon
 
 
 def draw_detections(frame: np.ndarray, detections: list[Detection]) -> None:
@@ -22,7 +23,14 @@ def draw_detections(frame: np.ndarray, detections: list[Detection]) -> None:
             2,
         )
 
+        id_text = (
+            f"ID: {detection.track_id} "
+            if detection.track_id is not None
+            else ""
+        )
+
         label = (
+            f"{id_text}"
             f"{detection.class_name} "
             f"{detection.confidence:.2f}"
         )
@@ -35,4 +43,32 @@ def draw_detections(frame: np.ndarray, detections: list[Detection]) -> None:
             0.6,
             color,
             2,
+        )
+
+def draw_zone(frame: np.ndarray, detections: list[Detection], polygon: list[tuple[int, int]]) -> None:
+    contour = np.array(polygon, dtype=np.int32)
+
+    cv2.polylines(
+        frame,
+        [contour],
+        isClosed=True,
+        color=(0, 255, 255),
+        thickness=2,
+    )
+
+    for detection in detections:
+        if detection.class_name != "person":
+            continue
+
+        point = bottom_center(detection)
+        inside = point_in_polygon(point, polygon)
+
+        color = (0, 0, 255) if inside else (0, 255, 0)
+
+        cv2.circle(
+            frame,
+            point,
+            radius=5,
+            color=color,
+            thickness=-1,
         )
