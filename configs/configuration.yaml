@@ -1,6 +1,6 @@
 camera:
   id: cam_01
-  source: data/smoke_02.mp4
+  source: data/test1.mp4
   reconnect_sec: 2
 
 models:
@@ -41,3 +41,16 @@ fire_smoke:
   confirmation_n: 3
   confirmation_m: 5
   cooldown_sec: 10
+
+spill:
+  enabled: false
+  difference_threshold: 35
+  min_area_ratio: 0.02
+  confirmation_n: 3
+  confirmation_m: 5
+  cooldown_sec: 10
+  polygon:
+    - [0.10, 0.45]
+    - [0.90, 0.45]
+    - [0.90, 0.95]
+    - [0.10, 0.95]

@@ -1,9 +1,11 @@
 import logging
 import time
 from pathlib import Path
+from collections import deque
 
 import yaml
 import cv2
+import numpy as np
 
 from src.capture.video_capture import VideoSource
 from src.monitoring.fps import FPSMeter
@@ -15,27 +17,20 @@ from src.events.event_engine import ZoneEventEngine
 from src.ppe.analyzer import check_ppe
 from src.events.ppe_events import PPEEventEngine
 from src.events.fire_smoke_events import FireSmokeEventEngine
+from src.events.engine import EventEngine
+from src.storage.event_store import EventStore
+from src.monitoring.logging_setup import setup_logging
+from src.inference.spill_detector import SpillDetector
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 WINDOW_NAME = "Industrial Vision"
 
 logger = logging.getLogger(__name__)
+camera_logger = logging.getLogger("camera_errors")
+monitor_logger = logging.getLogger("system_monitoring")
 
 def main() -> None:
-    logs_dir = PROJECT_ROOT / "logs"
-    logs_dir.mkdir(exist_ok=True)
-
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-        handlers=[
-            logging.StreamHandler(),
-            logging.FileHandler(
-                logs_dir / "application.log",
-                encoding="utf-8",
-            ),
-        ],
-    )
+    setup_logging(PROJECT_ROOT / "logs")
 
     config_path = PROJECT_ROOT / "configs" / "configuration.yaml"
 
@@ -96,6 +91,7 @@ def main() -> None:
 
     connected = False
     retry_at = 0.0
+    camera_lost = False
 
     ppe_config = config["ppe"]
 
@@ -149,6 +145,33 @@ def main() -> None:
         cooldown_sec=float(fire_config["cooldown_sec"]),
     )
 
+    storage_path = Path(config["storage"]["root"])
+
+    if not storage_path.is_absolute():
+        storage_path = PROJECT_ROOT / storage_path
+
+    event_store = EventStore(storage_path)
+
+    event_engine = EventEngine(
+        camera_id=camera_config["id"],
+        store=event_store,
+    )
+
+    spill_config = config["spill"]
+
+    spill_enabled = spill_config.get("enabled", False)
+
+    spill_detector = SpillDetector(
+        polygon=spill_config["polygon"],
+        difference_threshold=int(spill_config["difference_threshold"]),
+        min_area_ratio=float(spill_config["min_area_ratio"]),
+    )
+
+    spill_history = deque(
+        maxlen=int(spill_config["confirmation_m"])
+    )
+    last_spill_event = None
+
     logger.info("Запуск камеры %s", camera_config["id"])
 
     try:
@@ -160,8 +183,17 @@ def main() -> None:
                     try:
                         video.open()
                     except RuntimeError as error:
-                        logger.error("%s", error)
+                        camera_logger.error("%s", error)
+
+                        if not camera_lost:
+                            event_engine.emit({
+                                "event_type": "camera_stream_lost",
+                            })
+
+                            camera_lost = True
+
                         retry_at = time.perf_counter() + reconnect_sec
+
                         logger.info(
                             "Следующая попытка подключения через %.1f секунд",
                             reconnect_sec,
@@ -172,6 +204,9 @@ def main() -> None:
                         zone_events.reset()
                         ppe_events.reset()
                         fire_events.reset()
+                        spill_detector.reset()
+                        spill_history.clear()
+                        last_spill_event = None
                         frame_number = 0
                         fps_meter.reset()
                         last_fps_log = time.perf_counter()
@@ -184,7 +219,15 @@ def main() -> None:
             try:
                 frame = video.read()
             except RuntimeError as error:
-                logger.error("Видеопоток потерян: %s", error)
+                camera_logger.error("Видеопоток потерян: %s", error)
+
+                if not camera_lost:
+                    event_engine.emit({
+                        "event_type": "camera_stream_lost",
+                    })
+
+                    camera_lost = True
+
                 video.close()
                 connected = False
                 retry_at = time.perf_counter() + reconnect_sec
@@ -194,6 +237,19 @@ def main() -> None:
                 logger.info("Чтение видеофайла завершено: конец файла или ошибка декодирования")
                 break
 
+            if camera_lost:
+                event_engine.emit(
+                    data={
+                        "event_type": "camera_stream_restored",
+                    },
+                    frame=frame,
+                )
+
+                camera_logger.info("Получение кадров восстановлено")
+                camera_lost = False
+
+            evidence_frame = frame.copy()
+
             frame_number += 1
 
             inference_started = time.perf_counter()
@@ -201,6 +257,10 @@ def main() -> None:
             try:
                 detections = tracker.update(frame)
                 fire_detections = fire_detector.predict(frame)
+                if spill_enabled:
+                    spill_mask = spill_detector.predict(frame)
+                else:
+                    spill_mask = np.zeros(frame.shape[:2], dtype=np.uint8)
                 equipment = []
 
                 frame_height, frame_width = frame.shape[:2]
@@ -247,6 +307,45 @@ def main() -> None:
 
             height, width = frame.shape[:2]
 
+            # разлив
+            spill_present = cv2.countNonZero(spill_mask) > 0
+            spill_history.append(spill_present)
+
+            now = time.perf_counter()
+
+            spill_confirmed = (
+                len(spill_history) == spill_history.maxlen
+                and sum(spill_history) >= int(spill_config["confirmation_n"])
+            )
+
+            spill_cooldown_finished = (
+                last_spill_event is None
+                or now - last_spill_event >= float(spill_config["cooldown_sec"])
+            )
+
+            if spill_present and spill_confirmed and spill_cooldown_finished:
+                x, y, box_width, box_height = cv2.boundingRect(spill_mask)
+
+                event_engine.emit(
+                    data={
+                        "event_type": "spill_detected",
+                        "coordinates": {
+                            "x": (x + box_width / 2) / width,
+                            "y": (y + box_height / 2) / height,
+                            "bbox": [
+                                x / width,
+                                y / height,
+                                (x + box_width) / width,
+                                (y + box_height) / height,
+                            ],
+                        },
+                    },
+                    frame=evidence_frame,
+                )
+
+                last_spill_event = now
+            #
+
             ppe_results = check_ppe(
                 people=detections,
                 equipment=equipment,
@@ -254,41 +353,48 @@ def main() -> None:
                 frame_height=height,
             )
 
-            for event in ppe_events.update(ppe_results):
-                logger.warning(
-                    "Возможное нарушение СИЗ: %s | камера: %s | track_id: %d",
-                    event["event_type"],
-                    camera_config["id"],
-                    event["track_id"],
-                )
-
             polygon_px = polygon_to_pixels(
                 zone_polygon,
                 width,
                 height,
             )
 
-            events = zone_events.update(detections, polygon_px)
+            # Собираем подтверждённые события.
+            pending_events = []
+            pending_events.extend(ppe_events.update(ppe_results))
+            pending_events.extend(zone_events.update(detections, polygon_px))
+            pending_events.extend(fire_events.update(fire_detections))
 
-            for event in events:
-                logger.warning(
-                    "Событие: %s | камера: %s | зона: %s | "
-                    "track_id: %d | confidence: %.2f",
-                    event["event_type"],
-                    camera_config["id"],
-                    event["zone_id"],
-                    event["track_id"],
-                    event["confidence"],
+            # Находим объект события по Track ID.
+            objects_by_id = {
+                obj.track_id: obj
+                for obj in detections
+                if obj.track_id is not None
+            }
+
+            for event in pending_events:
+                obj = event.get("object")
+
+                if obj is None:
+                    obj = objects_by_id.get(event.get("track_id"))
+
+                event_engine.emit(
+                    data=event,
+                    frame=evidence_frame,
+                    obj=obj,
                 )
 
-            for event in fire_events.update(fire_detections):
-                logger.warning(
-                    "Событие: %s | камера: %s | confidence: %.2f | кадр: %d",
-                    event["event_type"],
-                    camera_config["id"],
-                    event["confidence"],
-                    frame_number,
-                )
+            overlay = frame.copy()
+            overlay[spill_mask > 0] = (255, 0, 255)
+
+            cv2.addWeighted(
+                overlay,
+                0.35,
+                frame,
+                0.65,
+                0,
+                dst=frame,
+            )
 
             draw_detections(frame, detections)
             draw_detections(frame, equipment)
@@ -323,7 +429,7 @@ def main() -> None:
             now = time.perf_counter()
 
             if now - last_fps_log >= 1.0:
-                logger.info(
+                monitor_logger.info(
                     "FPS обработки: %.1f | "
                     "обработка моделями: %.1f мс | "
                     "объектов: %d",
@@ -356,7 +462,12 @@ def main() -> None:
 
             cv2.imshow(WINDOW_NAME, frame)
 
-            if cv2.waitKey(1) & 0xFF in (ord("q"), 27):
+            key = cv2.waitKey(1)
+
+            if key != -1:
+                logger.info("Нажата клавиша: %d", key)
+
+            if (key & 0xFF) in (ord("q"), 27):
                 break
 
     except KeyboardInterrupt:

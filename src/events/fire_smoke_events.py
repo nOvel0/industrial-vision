@@ -55,6 +55,7 @@ class FireSmokeEventEngine:
                 events.append({
                     "event_type": f"{class_name}_detected",
                     "confidence": best.confidence,
+                    "object": best,
                 })
 
                 self.last_event[class_name] = now
