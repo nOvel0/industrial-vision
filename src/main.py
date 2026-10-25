@@ -14,6 +14,7 @@ from src.tracking.tracker import Tracker
 from src.events.event_engine import ZoneEventEngine
 from src.ppe.analyzer import check_ppe
 from src.events.ppe_events import PPEEventEngine
+from src.events.fire_smoke_events import FireSmokeEventEngine
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 WINDOW_NAME = "Industrial Vision"
@@ -122,6 +123,32 @@ def main() -> None:
         cooldown_sec=float(event_config["cooldown_sec"]),
     )
 
+    fire_config = config["fire_smoke"]
+
+    fire_model_path = Path(fire_config["model_path"])
+
+    if not fire_model_path.is_absolute():
+        fire_model_path = PROJECT_ROOT / fire_model_path
+
+    fire_detector = Detector(
+        model_path=fire_model_path,
+        confidence=float(fire_config["confidence"]),
+        imgsz=int(fire_config["imgsz"]),
+        device=str(model_config["device"]),
+        classes=[0, 1],
+    )
+
+    logger.info(
+        "Классы модели дыма и огня: %s",
+        fire_detector.model.names,
+    )
+
+    fire_events = FireSmokeEventEngine(
+        n=int(fire_config["confirmation_n"]),
+        m=int(fire_config["confirmation_m"]),
+        cooldown_sec=float(fire_config["cooldown_sec"]),
+    )
+
     logger.info("Запуск камеры %s", camera_config["id"])
 
     try:
@@ -144,6 +171,8 @@ def main() -> None:
                         tracker.reset()
                         zone_events.reset()
                         ppe_events.reset()
+                        fire_events.reset()
+                        frame_number = 0
                         fps_meter.reset()
                         last_fps_log = time.perf_counter()
 
@@ -165,10 +194,13 @@ def main() -> None:
                 logger.info("Чтение видеофайла завершено: конец файла или ошибка декодирования")
                 break
 
+            frame_number += 1
+
             inference_started = time.perf_counter()
 
             try:
                 detections = tracker.update(frame)
+                fire_detections = fire_detector.predict(frame)
                 equipment = []
 
                 frame_height, frame_width = frame.shape[:2]
@@ -206,7 +238,7 @@ def main() -> None:
 
                     equipment.extend(items)
             except Exception:
-                logger.exception("Ошибка детекции, tracking или PPE-модели")
+                logger.exception("Ошибка обработки кадра моделями")
                 raise
 
             inference_ms = (
@@ -249,8 +281,18 @@ def main() -> None:
                     event["confidence"],
                 )
 
+            for event in fire_events.update(fire_detections):
+                logger.warning(
+                    "Событие: %s | камера: %s | confidence: %.2f | кадр: %d",
+                    event["event_type"],
+                    camera_config["id"],
+                    event["confidence"],
+                    frame_number,
+                )
+
             draw_detections(frame, detections)
             draw_detections(frame, equipment)
+            draw_detections(frame, fire_detections)
             for result in ppe_results:
                 person = result["person"]
 
@@ -283,7 +325,7 @@ def main() -> None:
             if now - last_fps_log >= 1.0:
                 logger.info(
                     "FPS обработки: %.1f | "
-                    "детекция, tracking и PPE: %.1f мс | "
+                    "обработка моделями: %.1f мс | "
                     "объектов: %d",
                     fps,
                     inference_ms,

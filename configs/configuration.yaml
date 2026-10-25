@@ -1,6 +1,6 @@
 camera:
   id: cam_01
-  source: data/test4.mp4
+  source: data/smoke_02.mp4
   reconnect_sec: 2
 
 models:
@@ -33,3 +33,11 @@ ppe:
   min_person_height: 120
   confirmation_n: 5
   confirmation_m: 7
+
+fire_smoke:
+  model_path: models/fire_smoke.pt
+  confidence: 0.40
+  imgsz: 640
+  confirmation_n: 3
+  confirmation_m: 5
+  cooldown_sec: 10
