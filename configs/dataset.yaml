@@ -1,5 +1,4 @@
-# Относительно корня проекта при запуске команды ниже.
-path: datasets/ppe
+path: datasets/ppe_v2_simple
 train: images/train
 val: images/val
 test: images/test

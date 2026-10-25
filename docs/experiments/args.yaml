@@ -1,7 +1,7 @@
 task: detect
 mode: train
 model: yolo26n.pt
-data: /content/dataset.yaml
+data: /content/dataset_v2.yaml
 epochs: 30
 time: null
 patience: 10
@@ -13,7 +13,7 @@ cache: false
 device: '0'
 workers: 2
 project: /content/runs
-name: ppe_exp01
+name: ppe_exp02
 exist_ok: false
 pretrained: true
 cls_remap: true
@@ -111,4 +111,4 @@ auto_augment: randaugment
 erasing: 0.4
 cfg: null
 tracker: tracktrack.yaml
-save_dir: /content/runs/ppe_exp01
+save_dir: /content/runs/ppe_exp02

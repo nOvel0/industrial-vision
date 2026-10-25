@@ -7,7 +7,6 @@ data/
 datasets/
 models/
 runs/
-events/
 logs/
 
 .env
