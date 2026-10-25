@@ -7,6 +7,8 @@ import cv2
 
 from src.capture.video_capture import VideoSource
 from src.monitoring.fps import FPSMeter
+from src.inference.detector import Detector
+from src.inference.visualization import draw_detections
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 WINDOW_NAME = "Industrial Vision"
@@ -47,6 +49,24 @@ def main() -> None:
         if not source_path.is_absolute():
             source_path = PROJECT_ROOT / source_path
         source = str(source_path)
+
+    model_config = config["models"]
+
+    model_path = Path(model_config["detector_path"])
+    if not model_path.is_absolute():
+        model_path = PROJECT_ROOT / model_path
+
+    try:
+        detector = Detector(
+            model_path=model_path,
+            confidence=float(model_config["confidence"]),
+            imgsz=int(model_config["imgsz"]),
+            device=str(model_config["device"]),
+            classes=model_config["classes"],
+        )
+    except Exception:
+        logger.exception("Не удалось подготовить детектор")
+        raise
 
     video = VideoSource(source)
     fps_meter = FPSMeter()
@@ -94,12 +114,33 @@ def main() -> None:
                 logger.info("Чтение видеофайла завершено: конец файла или ошибка декодирования")
                 break
 
-            fps = fps_meter.tick()
+            inference_started = time.perf_counter()
 
+            try:
+                detections = detector.predict(frame)
+            except Exception:
+                logger.exception("Ошибка обработки кадра детектором")
+                raise
+
+            inference_ms = (
+                time.perf_counter() - inference_started
+            ) * 1000
+
+            draw_detections(frame, detections)
+
+            fps = fps_meter.tick()
             now = time.perf_counter()
 
             if now - last_fps_log >= 1.0:
-                logger.info("Частота кадров: %.1f", fps)
+                logger.info(
+                    "FPS обработки: %.1f | "
+                    "вызов детектора: %.1f мс | "
+                    "объектов: %d",
+                    fps,
+                    inference_ms,
+                    len(detections),
+                )
+
                 last_fps_log = now
 
             cv2.putText(
@@ -109,6 +150,16 @@ def main() -> None:
                 cv2.FONT_HERSHEY_SIMPLEX,
                 1,
                 (0, 255, 0),
+                2,
+            )
+
+            cv2.putText(
+                frame,
+                f"Detector: {inference_ms:.1f} ms | Objects: {len(detections)}",
+                (20, 75),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.7,
+                (0, 255, 255),
                 2,
             )
 

@@ -1,12 +1,14 @@
 camera:
   id: cam_01
-  source: data/test.mp4
+  source: data/test1.mp4
   reconnect_sec: 2
 
 models:
-  detector_path: models/detector.pt
-  person_confidence: 0.50
-  fire_confidence: 0.65
+  detector_path: models/yolo26n.pt
+  confidence: 0.40
+  imgsz: 640
+  device: cpu
+  classes: [0, 1, 2, 3, 5, 7]
 
 zones:
   restricted_01:
