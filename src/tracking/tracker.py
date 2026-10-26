@@ -4,6 +4,7 @@ import numpy as np
 
 from src.inference.detector import Detector
 from src.inference.types import Detection
+from src.monitoring.benchmark import benchmark
 
 
 class Tracker:
@@ -21,6 +22,8 @@ class Tracker:
             classes=self.detector.classes,
             verbose=False,
         )[0]
+
+        benchmark.record_model(result.speed)
 
         detections: list[Detection] = []
 

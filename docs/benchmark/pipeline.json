@@ -1,0 +1,224 @@
+{
+  "frames": 200,
+  "warmup_frames": 5,
+  "fps": 8.9461663779637,
+  "metrics": {
+    "capture": {
+      "mean_ms": 1.9997298353700899,
+      "p95_ms": 3.8258573447819786,
+      "max_ms": 6.422955004381947
+    },
+    "preprocessing": {
+      "mean_ms": 4.608754165456048,
+      "p95_ms": 6.48981910344446,
+      "max_ms": 25.206020014593378
+    },
+    "inference": {
+      "mean_ms": 94.08684936504869,
+      "p95_ms": 123.54405011210474,
+      "max_ms": 178.18301300576422
+    },
+    "postprocessing": {
+      "mean_ms": 1.814060279793921,
+      "p95_ms": 2.446612487983657,
+      "max_ms": 3.79749400599394
+    },
+    "event_processing": {
+      "mean_ms": 0.944659119923017,
+      "p95_ms": 0.909254750149427,
+      "max_ms": 22.79936098784674
+    },
+    "other": {
+      "mean_ms": 8.325670274571166,
+      "p95_ms": 18.890742754592786,
+      "max_ms": 37.52119003911503
+    },
+    "total_pipeline": {
+      "mean_ms": 111.77972304016293,
+      "p95_ms": 149.04737095421297,
+      "max_ms": 198.94657901022583
+    }
+  },
+  "resources": [
+    {
+      "cpu_percent": 24.5,
+      "process_ram_mb": 584.41796875,
+      "system_ram_percent": 84.9,
+      "max_sensor_temperature_c": 69.25,
+      "disk_free_gb": 20.858116149902344,
+      "disk_used_gb": 78.93133926391602
+    },
+    {
+      "cpu_percent": 72.3,
+      "process_ram_mb": 620.93359375,
+      "system_ram_percent": 85.2,
+      "max_sensor_temperature_c": 70.0,
+      "disk_free_gb": 20.854270935058594,
+      "disk_used_gb": 78.93518447875977
+    },
+    {
+      "cpu_percent": 77.6,
+      "process_ram_mb": 631.81640625,
+      "system_ram_percent": 85.3,
+      "max_sensor_temperature_c": 70.375,
+      "disk_free_gb": 20.854270935058594,
+      "disk_used_gb": 78.93518447875977
+    },
+    {
+      "cpu_percent": 75.9,
+      "process_ram_mb": 630.9765625,
+      "system_ram_percent": 85.4,
+      "max_sensor_temperature_c": 70.625,
+      "disk_free_gb": 20.854270935058594,
+      "disk_used_gb": 78.93518447875977
+    },
+    {
+      "cpu_percent": 76.3,
+      "process_ram_mb": 637.29296875,
+      "system_ram_percent": 85.4,
+      "max_sensor_temperature_c": 70.75,
+      "disk_free_gb": 20.854270935058594,
+      "disk_used_gb": 78.93518447875977
+    },
+    {
+      "cpu_percent": 75.9,
+      "process_ram_mb": 637.33984375,
+      "system_ram_percent": 85.4,
+      "max_sensor_temperature_c": 70.875,
+      "disk_free_gb": 20.85427474975586,
+      "disk_used_gb": 78.9351806640625
+    },
+    {
+      "cpu_percent": 77.2,
+      "process_ram_mb": 637.3515625,
+      "system_ram_percent": 85.4,
+      "max_sensor_temperature_c": 70.875,
+      "disk_free_gb": 20.85427474975586,
+      "disk_used_gb": 78.9351806640625
+    },
+    {
+      "cpu_percent": 75.7,
+      "process_ram_mb": 637.3671875,
+      "system_ram_percent": 85.4,
+      "max_sensor_temperature_c": 71.0,
+      "disk_free_gb": 20.85427474975586,
+      "disk_used_gb": 78.9351806640625
+    },
+    {
+      "cpu_percent": 76.4,
+      "process_ram_mb": 637.375,
+      "system_ram_percent": 85.4,
+      "max_sensor_temperature_c": 71.0,
+      "disk_free_gb": 20.85427474975586,
+      "disk_used_gb": 78.9351806640625
+    },
+    {
+      "cpu_percent": 78.0,
+      "process_ram_mb": 637.3828125,
+      "system_ram_percent": 85.4,
+      "max_sensor_temperature_c": 71.0,
+      "disk_free_gb": 20.85427474975586,
+      "disk_used_gb": 78.9351806640625
+    },
+    {
+      "cpu_percent": 79.9,
+      "process_ram_mb": 639.9765625,
+      "system_ram_percent": 85.4,
+      "max_sensor_temperature_c": 71.0,
+      "disk_free_gb": 20.852828979492188,
+      "disk_used_gb": 78.93662643432617
+    },
+    {
+      "cpu_percent": 83.6,
+      "process_ram_mb": 643.73828125,
+      "system_ram_percent": 85.4,
+      "max_sensor_temperature_c": 71.0,
+      "disk_free_gb": 20.85186004638672,
+      "disk_used_gb": 78.93759536743164
+    },
+    {
+      "cpu_percent": 76.7,
+      "process_ram_mb": 643.75,
+      "system_ram_percent": 85.4,
+      "max_sensor_temperature_c": 71.0,
+      "disk_free_gb": 20.85187530517578,
+      "disk_used_gb": 78.93758010864258
+    },
+    {
+      "cpu_percent": 82.3,
+      "process_ram_mb": 643.75390625,
+      "system_ram_percent": 85.3,
+      "max_sensor_temperature_c": 71.0,
+      "disk_free_gb": 20.851863861083984,
+      "disk_used_gb": 78.93759155273438
+    },
+    {
+      "cpu_percent": 77.5,
+      "process_ram_mb": 643.7578125,
+      "system_ram_percent": 85.3,
+      "max_sensor_temperature_c": 71.0,
+      "disk_free_gb": 20.850914001464844,
+      "disk_used_gb": 78.93854141235352
+    },
+    {
+      "cpu_percent": 76.9,
+      "process_ram_mb": 643.7734375,
+      "system_ram_percent": 85.3,
+      "max_sensor_temperature_c": 71.0,
+      "disk_free_gb": 20.850955963134766,
+      "disk_used_gb": 78.9384994506836
+    },
+    {
+      "cpu_percent": 71.2,
+      "process_ram_mb": 643.7890625,
+      "system_ram_percent": 85.3,
+      "max_sensor_temperature_c": 71.0,
+      "disk_free_gb": 20.85047149658203,
+      "disk_used_gb": 78.93898391723633
+    },
+    {
+      "cpu_percent": 75.9,
+      "process_ram_mb": 640.046875,
+      "system_ram_percent": 84.8,
+      "max_sensor_temperature_c": 71.0,
+      "disk_free_gb": 20.85047149658203,
+      "disk_used_gb": 78.93898391723633
+    },
+    {
+      "cpu_percent": 77.9,
+      "process_ram_mb": 646.296875,
+      "system_ram_percent": 84.7,
+      "max_sensor_temperature_c": 71.0,
+      "disk_free_gb": 20.85047149658203,
+      "disk_used_gb": 78.93898391723633
+    },
+    {
+      "cpu_percent": 74.9,
+      "process_ram_mb": 646.3359375,
+      "system_ram_percent": 84.7,
+      "max_sensor_temperature_c": 71.0,
+      "disk_free_gb": 20.849990844726562,
+      "disk_used_gb": 78.9394645690918
+    },
+    {
+      "cpu_percent": 75.1,
+      "process_ram_mb": 646.3515625,
+      "system_ram_percent": 84.8,
+      "max_sensor_temperature_c": 71.0,
+      "disk_free_gb": 20.84804916381836,
+      "disk_used_gb": 78.94140625
+    },
+    {
+      "cpu_percent": 78.8,
+      "process_ram_mb": 646.359375,
+      "system_ram_percent": 84.8,
+      "max_sensor_temperature_c": 71.0,
+      "disk_free_gb": 20.84804916381836,
+      "disk_used_gb": 78.94140625
+    }
+  ],
+  "mode": "headless; drawing retained, namedWindow/imshow/waitKey disabled",
+  "source": "/home/egor/study/year4/abd/industrial-vision/data/test1.mp4",
+  "api_enabled": true,
+  "spill_enabled": false
+}

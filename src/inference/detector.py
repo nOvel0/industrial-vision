@@ -7,6 +7,7 @@ import numpy as np
 from ultralytics import YOLO
 
 from src.inference.types import Detection
+from src.monitoring.benchmark import benchmark
 
 
 logger = logging.getLogger(__name__)
@@ -57,6 +58,8 @@ class Detector:
             classes=self.classes,
             verbose=False
         )[0]
+
+        benchmark.record_model(result.speed)
 
         detections: list[Detection] = []
 

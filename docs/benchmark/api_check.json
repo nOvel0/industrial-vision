@@ -1,0 +1,12 @@
+{
+  "/health": 200,
+  "/status": 200,
+  "/cameras": 200,
+  "thresholds_applied_between_frames": true,
+  "zone_applied_between_frames": true,
+  "/config/thresholds_invalid": 422,
+  "/config/zones_invalid": 422,
+  "/events/00000000-0000-0000-0000-000000000000_invalid": 404,
+  "events_and_evidence": true,
+  "all_passed": true
+}

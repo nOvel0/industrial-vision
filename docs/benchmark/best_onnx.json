@@ -1,0 +1,23 @@
+{
+  "scope": "single PPE model, predict(), without capture or tracking",
+  "weights": "/home/egor/study/year4/abd/industrial-vision/models/best.onnx",
+  "video": "/home/egor/study/year4/abd/industrial-vision/data/test1.mp4",
+  "imgsz": 640,
+  "rect": false,
+  "confidence": 0.4,
+  "classes": [
+    0,
+    1
+  ],
+  "frames": 200,
+  "warmup_frames": 5,
+  "model_size_mb": 9.352901458740234,
+  "mean_ms": 99.97488559019985,
+  "p95_ms": 124.22184130555252,
+  "max_ms": 168.08914400462527,
+  "fps": 10.00251207187204,
+  "peak_process_ram_mb": 585.328125,
+  "torch": "2.14.1+cpu",
+  "ultralytics": "8.4.188",
+  "device": "cpu"
+}

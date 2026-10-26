@@ -3,7 +3,7 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 
-events/
+
 logs/
 models/
 data/
@@ -12,3 +12,4 @@ runs/
 
 .env
 .ipynb_checkpoints/
+/events/

@@ -2,10 +2,13 @@ import logging
 import time
 from pathlib import Path
 from collections import deque
+from queue import Empty
+from threading import Thread
 
 import yaml
 import cv2
 import numpy as np
+import uvicorn
 
 from src.capture.video_capture import VideoSource
 from src.monitoring.fps import FPSMeter
@@ -21,6 +24,8 @@ from src.events.engine import EventEngine
 from src.storage.event_store import EventStore
 from src.monitoring.logging_setup import setup_logging
 from src.inference.spill_detector import SpillDetector
+from src.api import app as api
+from src.monitoring.benchmark import benchmark
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 WINDOW_NAME = "Industrial Vision"
@@ -172,18 +177,76 @@ def main() -> None:
     )
     last_spill_event = None
 
+    api.storage_root = storage_path
+
+    api.state = {
+        "camera_id": camera_config["id"],
+        "camera": "connecting",
+        "models": "loaded",
+        "fps": 0.0,
+        "thresholds": {
+            "detector": detector.confidence,
+            "ppe": ppe_detector.confidence,
+            "fire_smoke": fire_detector.confidence,
+        },
+        "zone_id": zone_id,
+        "polygon": zone_polygon,
+    }
+
+    server = uvicorn.Server(
+        uvicorn.Config(
+            api.app,
+            host="127.0.0.1",
+            port=8000,
+            log_config=None,
+            access_log=False,
+        )
+    )
+
+    api_thread = Thread(target=server.run, daemon=True)
+    api_thread.start()
+
     logger.info("Запуск камеры %s", camera_config["id"])
 
     try:
         cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
         last_fps_log = time.perf_counter()
         while True:
+            try:
+                while True:
+                    command, payload = api.commands.get_nowait()
+
+                    if command == "thresholds":
+                        detector.confidence = payload["detector"]
+                        ppe_detector.confidence = payload["ppe"]
+                        fire_detector.confidence = payload["fire_smoke"]
+
+                        zone_events.reset()
+                        ppe_events.reset()
+                        fire_events.reset()
+
+                        api.state["thresholds"] = payload
+
+                    elif command == "zone":
+                        zone_polygon = payload
+                        zone_events.reset()
+
+                        api.state["polygon"] = zone_polygon
+
+                    logger.info("Настройки обновлены через API: %s", command)
+
+            except Empty:
+                pass
+
             if not connected:
                 if time.perf_counter() >= retry_at:
                     try:
                         video.open()
                     except RuntimeError as error:
                         camera_logger.error("%s", error)
+                        
+                        api.state["camera"] = "disconnected"
+                        api.state["fps"] = 0.0
 
                         if not camera_lost:
                             event_engine.emit({
@@ -216,10 +279,15 @@ def main() -> None:
                         break
                     continue
 
+            benchmark.start()
+            capture_started = time.perf_counter()
+
             try:
                 frame = video.read()
             except RuntimeError as error:
                 camera_logger.error("Видеопоток потерян: %s", error)
+                api.state["camera"] = "disconnected"
+                api.state["fps"] = 0.0
 
                 if not camera_lost:
                     event_engine.emit({
@@ -233,9 +301,13 @@ def main() -> None:
                 retry_at = time.perf_counter() + reconnect_sec
                 continue
 
+            capture_ms = (time.perf_counter() - capture_started) * 1000
+
             if frame is None:
                 logger.info("Чтение видеофайла завершено: конец файла или ошибка декодирования")
                 break
+
+            api.state["camera"] = "connected"
 
             if camera_lost:
                 event_engine.emit(
@@ -307,6 +379,8 @@ def main() -> None:
 
             height, width = frame.shape[:2]
 
+            event_started = time.perf_counter()
+
             # разлив
             spill_present = cv2.countNonZero(spill_mask) > 0
             spill_history.append(spill_present)
@@ -346,6 +420,9 @@ def main() -> None:
                 last_spill_event = now
             #
 
+            event_ms = (time.perf_counter() - event_started) * 1000
+            post_started = time.perf_counter()
+
             ppe_results = check_ppe(
                 people=detections,
                 equipment=equipment,
@@ -358,6 +435,9 @@ def main() -> None:
                 width,
                 height,
             )
+
+            post_ms = (time.perf_counter() - post_started) * 1000
+            event_started = time.perf_counter()
 
             # Собираем подтверждённые события.
             pending_events = []
@@ -383,6 +463,8 @@ def main() -> None:
                     frame=evidence_frame,
                     obj=obj,
                 )
+
+            event_ms += (time.perf_counter() - event_started) * 1000
 
             overlay = frame.copy()
             overlay[spill_mask > 0] = (255, 0, 255)
@@ -426,6 +508,7 @@ def main() -> None:
             draw_zone(frame, detections, polygon_px)
 
             fps = fps_meter.tick()
+            api.state["fps"] = fps
             now = time.perf_counter()
 
             if now - last_fps_log >= 1.0:
@@ -438,6 +521,7 @@ def main() -> None:
                     len(detections),
                 )
 
+                benchmark.sample_resources()
                 last_fps_log = now
 
             cv2.putText(
@@ -467,14 +551,19 @@ def main() -> None:
             if key != -1:
                 logger.info("Нажата клавиша: %d", key)
 
+            benchmark.finish(capture_ms, post_ms, event_ms)
+
             if (key & 0xFF) in (ord("q"), 27):
                 break
 
     except KeyboardInterrupt:
         logger.info("Остановлено с клавиатуры")
     finally:
+        server.should_exit = True
+        api_thread.join(timeout=2)
         video.close()
         cv2.destroyAllWindows()
+        benchmark.save(PROJECT_ROOT / "runs/benchmark/pipeline.json")
         logger.info("Ресурсы освобождены")
 
 
