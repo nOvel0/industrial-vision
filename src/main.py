@@ -14,7 +14,7 @@ from src.capture.video_capture import VideoSource
 from src.monitoring.fps import FPSMeter
 from src.inference.detector import Detector
 from src.inference.visualization import draw_detections, draw_zone
-from src.zones.geometry import polygon_to_pixels
+from src.zones.geometry import point_in_polygon, polygon_to_pixels
 from src.tracking.tracker import Tracker
 from src.events.event_engine import ZoneEventEngine
 from src.ppe.analyzer import check_ppe
@@ -125,6 +125,21 @@ def main() -> None:
     )
 
     fire_config = config["fire_smoke"]
+    fire_polygon = fire_config.get("polygon")
+
+    if fire_polygon is not None and (
+        not isinstance(fire_polygon, list)
+        or len(fire_polygon) < 3
+        or any(
+            not isinstance(point, list)
+            or len(point) != 2
+            or not all(type(coord) in (int, float) and 0 <= coord <= 1 for coord in point)
+            for point in fire_polygon
+        )
+    ):
+        raise ValueError(
+            "fire_smoke.polygon должен содержать минимум три точки [x, y] в диапазоне [0, 1]"
+        )
 
     fire_model_path = Path(fire_config["model_path"])
 
@@ -328,14 +343,42 @@ def main() -> None:
 
             try:
                 detections = tracker.update(frame)
-                fire_detections = fire_detector.predict(frame)
+                frame_height, frame_width = frame.shape[:2]
+                fire_polygon_px = None
+
+                if fire_polygon is None:
+                    fire_detections = fire_detector.predict(frame)
+                else:
+                    fire_polygon_px = polygon_to_pixels(fire_polygon, frame_width, frame_height)
+                    contour = np.array(fire_polygon_px, dtype=np.int32)
+                    roi_x, roi_y, roi_width, roi_height = cv2.boundingRect(contour)
+                    fire_crop = frame[roi_y:roi_y + roi_height, roi_x:roi_x + roi_width]
+
+                    # Закрываем часть вырезанного кадра за границей зоны.
+                    mask = np.zeros(fire_crop.shape[:2], dtype=np.uint8)
+                    contour -= (roi_x, roi_y)
+                    cv2.fillPoly(mask, [contour], 255)
+                    fire_crop = cv2.bitwise_and(fire_crop, fire_crop, mask=mask)
+
+                    fire_detections = []
+                    for detection in fire_detector.predict(fire_crop):
+                        # Переносим рамку на исходный кадр.
+                        detection.x1 += roi_x
+                        detection.x2 += roi_x
+                        detection.y1 += roi_y
+                        detection.y2 += roi_y
+                        center = (
+                            (detection.x1 + detection.x2) // 2,
+                            (detection.y1 + detection.y2) // 2,
+                        )
+                        if point_in_polygon(center, fire_polygon_px):
+                            fire_detections.append(detection)
+
                 if spill_enabled:
                     spill_mask = spill_detector.predict(frame)
                 else:
                     spill_mask = np.zeros(frame.shape[:2], dtype=np.uint8)
                 equipment = []
-
-                frame_height, frame_width = frame.shape[:2]
 
                 for person in detections:
                     if person.class_name != "person" or person.track_id is None:
@@ -506,6 +549,14 @@ def main() -> None:
                 )
 
             draw_zone(frame, detections, polygon_px)
+            if fire_polygon_px is not None:
+                cv2.polylines(
+                    frame,
+                    [np.array(fire_polygon_px, dtype=np.int32)],
+                    isClosed=True,
+                    color=(255, 160, 0),
+                    thickness=1,
+                )
 
             fps = fps_meter.tick()
             api.state["fps"] = fps
