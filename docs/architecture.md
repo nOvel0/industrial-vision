@@ -1,65 +1,35 @@
 # Архитектура Industrial Vision
 
-## Общая схема
-
 ```mermaid
-flowchart TB
-    subgraph MAIN[" "]
-        direction TB
-        A["Камера / видеопоток"]
-        B["Video Capture"]
-        C["Preprocessing"]
-        D["AI Inference"]
-        E["Tracking"]
-        F["ROI / Analytics"]
-        G["Event Engine"]
-        H["Snapshot / Evidence"]
-        I["Event Storage"]
-        J["REST API / JSON / MQTT"]
-        K["Интерфейс мониторинга"]
-
-        A --> B --> C --> D --> E --> F --> G --> H --> I --> J --> K
-    end
-
-    subgraph MON[" "]
-        direction TB
-        M1["System Monitoring"]
-        M2["Camera status"]
-        M3["CPU / GPU"]
-        M4["RAM / Disk"]
-        M5["Temperature"]
-        M6["FPS / Latency"]
-        M7["Errors / Logs"]
-
-        M1 --> M2 --> M3 --> M4 --> M5 --> M6 --> M7
-    end
-
-    B --> M2
-    D --> M3
-    G --> M6
-
-    style MAIN fill:none,stroke:none
-    style MON fill:none,stroke:none
-
-    classDef block fill:#ffffff,stroke:#222222,color:#111111,stroke-width:1px
-    class A,B,C,D,E,F,G,H,I,J,K,M1,M2,M3,M4,M5,M6,M7 block
+flowchart TD
+    source["Видео или камера"] --> capture["Чтение кадров"]
+    capture --> general["YOLO26n — люди и транспорт"]
+    capture --> fire["Дым и огонь в заданной зоне"]
+    capture --> spill["Маска разлива в области пола"]
+    general --> tracker["ByteTrack — ID объектов"]
+    tracker --> zone["Проверка запретной зоны"]
+    tracker --> ppe["Проверка каски и жилета в вырезанной области человека"]
+    zone --> events["Подтверждение событий"]
+    ppe --> events
+    fire --> events
+    spill --> events
+    events --> storage["JSON и снимок"]
+    storage --> api["REST API"]
+    tracker --> display["Окно OpenCV"]
+    ppe --> display
+    fire --> display
+    spill --> display
 ```
 
-## Описание
+## Что делают модули
 
-Система построена по модульному принципу.
+- `src/capture/` читает видео. При сбое камеры основной цикл записывает ошибку и повторяет подключение.
+- `src/inference/` запускает модели. Общий детектор работает по полному кадру. Дым, огонь и разлив могут искать только в заданных областях.
+- `src/tracking/` связывает обнаруженные объекты между кадрами и присваивает им `Track ID`.
+- `src/zones/` проверяет, попадает ли середина нижней стороны рамки объекта в запретную зону. `src/ppe/` сопоставляет найденные каски и жилеты людям.
+- `src/events/` подтверждает события по нескольким проверенным кадрам и ограничивает частоту повторов.
+- `src/storage/` сохраняет события в JSON и записывает снимки.
+- `src/api/` отдаёт состояние приложения и события. Команды изменения порогов и запретной зоны передаёт в очередь основного цикла.
+- `src/monitoring/` измеряет FPS и время обработки, записывает загрузку CPU, использование памяти, температуру и место на диске.
 
-Video Capture отвечает за получение кадров.
-Preprocessing подготавливает изображения.
-AI Inference запускает модели компьютерного зрения.
-Tracking связывает объекты между кадрами.
-ROI / Analytics проверяет условия аналитики.
-Event Engine формирует события.
-Event Storage сохраняет результаты.
-REST API предоставляет доступ к событиям.
-
-Monitoring / Logging обеспечивает контроль состояния
-компонентов и регистрацию ошибок.
-
-На первом этапе архитектура спроектирована.
-Реализация модулей выполняется последовательно.
+Точка запуска — `src.main`. При текущем интервале `3` модели и трекер работают на каждом третьем кадре, а окно выводит все кадры. События подтверждаются только по кадрам с новыми результатами. Настройки находятся в [конфигурации](../configs/configuration.yaml).
