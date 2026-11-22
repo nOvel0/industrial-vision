@@ -63,6 +63,9 @@ def main() -> None:
         source = str(source_path)
 
     model_config = config["models"]
+    inference_interval = model_config.get("inference_interval", 1)
+    if type(inference_interval) is not int or inference_interval < 1:
+        raise ValueError("models.inference_interval должен быть целым числом от 1")
 
     model_path = Path(model_config["detector_path"])
     if not model_path.is_absolute():
@@ -97,6 +100,8 @@ def main() -> None:
     connected = False
     retry_at = 0.0
     camera_lost = False
+    frames_until_inference = 0
+    last_frame_size = None
 
     ppe_config = config["ppe"]
 
@@ -242,12 +247,14 @@ def main() -> None:
                         fire_events.reset()
 
                         api.state["thresholds"] = payload
+                        frames_until_inference = 0
 
                     elif command == "zone":
                         zone_polygon = payload
                         zone_events.reset()
 
                         api.state["polygon"] = zone_polygon
+                        frames_until_inference = 0
 
                     logger.info("Настройки обновлены через API: %s", command)
 
@@ -285,7 +292,7 @@ def main() -> None:
                         fire_events.reset()
                         spill_history.clear()
                         last_spill_event = None
-                        frame_number = 0
+                        frames_until_inference = 0
                         fps_meter.reset()
                         last_fps_log = time.perf_counter()
 
@@ -335,178 +342,182 @@ def main() -> None:
                 camera_logger.info("Получение кадров восстановлено")
                 camera_lost = False
 
-            evidence_frame = frame.copy()
-
-            frame_number += 1
-
-            inference_started = time.perf_counter()
-
-            try:
-                detections = tracker.update(frame)
-                frame_height, frame_width = frame.shape[:2]
-                fire_polygon_px = None
-
-                if fire_polygon is None:
-                    fire_detections = fire_detector.predict(frame)
-                else:
-                    fire_polygon_px = polygon_to_pixels(fire_polygon, frame_width, frame_height)
-                    contour = np.array(fire_polygon_px, dtype=np.int32)
-                    roi_x, roi_y, roi_width, roi_height = cv2.boundingRect(contour)
-                    fire_crop = frame[roi_y:roi_y + roi_height, roi_x:roi_x + roi_width]
-
-                    # Закрываем часть вырезанного кадра за границей зоны.
-                    mask = np.zeros(fire_crop.shape[:2], dtype=np.uint8)
-                    contour -= (roi_x, roi_y)
-                    cv2.fillPoly(mask, [contour], 255)
-                    fire_crop = cv2.bitwise_and(fire_crop, fire_crop, mask=mask)
-
-                    fire_detections = []
-                    for detection in fire_detector.predict(fire_crop):
-                        # Переносим рамку на исходный кадр.
-                        detection.x1 += roi_x
-                        detection.x2 += roi_x
-                        detection.y1 += roi_y
-                        detection.y2 += roi_y
-                        center = (
-                            (detection.x1 + detection.x2) // 2,
-                            (detection.y1 + detection.y2) // 2,
-                        )
-                        if point_in_polygon(center, fire_polygon_px):
-                            fire_detections.append(detection)
-
-                if spill_detector is not None:
-                    spill_mask, spill_confidence = spill_detector.predict(frame)
-                else:
-                    spill_mask = np.zeros(frame.shape[:2], dtype=np.uint8)
-                    spill_confidence = None
-                equipment = []
-
-                for person in detections:
-                    if person.class_name != "person" or person.track_id is None:
-                        continue
-
-                    person_height = person.y2 - person.y1
-
-                    if person_height < min_person_height:
-                        continue
-
-                    # Немного расширяем область вокруг человека.
-                    padding = int(person_height * 0.10)
-
-                    x1 = max(0, person.x1 - padding)
-                    y1 = max(0, person.y1 - padding)
-                    x2 = min(frame_width, person.x2 + padding)
-                    y2 = min(frame_height, person.y2 + padding)
-
-                    crop = frame[y1:y2, x1:x2]
-
-                    if crop.size == 0:
-                        continue
-
-                    items = ppe_detector.predict(crop)
-
-                    # Возвращаем координаты рамок в систему полного кадра.
-                    for item in items:
-                        item.x1 += x1
-                        item.x2 += x1
-                        item.y1 += y1
-                        item.y2 += y1
-
-                    equipment.extend(items)
-            except Exception:
-                logger.exception("Ошибка обработки кадра моделями")
-                raise
-
-            inference_ms = (
-                time.perf_counter() - inference_started
-            ) * 1000
-
             height, width = frame.shape[:2]
+            inference_ms = post_ms = event_ms = 0.0
 
-            event_started = time.perf_counter()
+            # На пропущенных кадрах показываем последние результаты
+            if frames_until_inference == 0 or (height, width) != last_frame_size:
+                frames_until_inference = inference_interval - 1
+                last_frame_size = (height, width)
+                evidence_frame = frame.copy()
 
-            spill_present = spill_confidence is not None
-            spill_history.append(spill_present)
+                inference_started = time.perf_counter()
 
-            now = time.perf_counter()
+                try:
+                    detections = tracker.update(frame)
+                    fire_polygon_px = None
 
-            spill_confirmed = (
-                len(spill_history) == spill_history.maxlen
-                and sum(spill_history) >= int(spill_config["confirmation_n"])
-            )
+                    if fire_polygon is None:
+                        fire_detections = fire_detector.predict(frame)
+                    else:
+                        fire_polygon_px = polygon_to_pixels(fire_polygon, width, height)
+                        contour = np.array(fire_polygon_px, dtype=np.int32)
+                        roi_x, roi_y, roi_width, roi_height = cv2.boundingRect(contour)
+                        fire_crop = frame[roi_y:roi_y + roi_height, roi_x:roi_x + roi_width]
 
-            spill_cooldown_finished = (
-                last_spill_event is None
-                or now - last_spill_event >= float(spill_config["cooldown_sec"])
-            )
+                        # Закрываем часть вырезанного кадра за границей зоны.
+                        mask = np.zeros(fire_crop.shape[:2], dtype=np.uint8)
+                        contour -= (roi_x, roi_y)
+                        cv2.fillPoly(mask, [contour], 255)
+                        fire_crop = cv2.bitwise_and(fire_crop, fire_crop, mask=mask)
 
-            if spill_present and spill_confirmed and spill_cooldown_finished:
-                x, y, box_width, box_height = cv2.boundingRect(spill_mask)
+                        fire_detections = []
+                        for detection in fire_detector.predict(fire_crop):
+                            # Переносим рамку на исходный кадр.
+                            detection.x1 += roi_x
+                            detection.x2 += roi_x
+                            detection.y1 += roi_y
+                            detection.y2 += roi_y
+                            center = (
+                                (detection.x1 + detection.x2) // 2,
+                                (detection.y1 + detection.y2) // 2,
+                            )
+                            if point_in_polygon(center, fire_polygon_px):
+                                fire_detections.append(detection)
 
-                event_engine.emit(
-                    data={
-                        "event_type": "spill_detected",
-                        "confidence": spill_confidence,
-                        "coordinates": {
-                            "x": (x + box_width / 2) / width,
-                            "y": (y + box_height / 2) / height,
-                            "bbox": [
-                                x / width,
-                                y / height,
-                                (x + box_width) / width,
-                                (y + box_height) / height,
-                            ],
+                    if spill_detector is not None:
+                        spill_mask, spill_confidence = spill_detector.predict(frame)
+                    else:
+                        spill_mask = np.zeros(frame.shape[:2], dtype=np.uint8)
+                        spill_confidence = None
+                    equipment = []
+
+                    for person in detections:
+                        if person.class_name != "person" or person.track_id is None:
+                            continue
+
+                        person_height = person.y2 - person.y1
+
+                        if person_height < min_person_height:
+                            continue
+
+                        # Немного расширяем область вокруг человека.
+                        padding = int(person_height * 0.10)
+
+                        x1 = max(0, person.x1 - padding)
+                        y1 = max(0, person.y1 - padding)
+                        x2 = min(width, person.x2 + padding)
+                        y2 = min(height, person.y2 + padding)
+
+                        crop = frame[y1:y2, x1:x2]
+
+                        if crop.size == 0:
+                            continue
+
+                        items = ppe_detector.predict(crop)
+
+                        # Возвращаем координаты рамок в систему полного кадра.
+                        for item in items:
+                            item.x1 += x1
+                            item.x2 += x1
+                            item.y1 += y1
+                            item.y2 += y1
+
+                        equipment.extend(items)
+                except Exception:
+                    logger.exception("Ошибка обработки кадра моделями")
+                    raise
+
+                inference_ms = (
+                    time.perf_counter() - inference_started
+                ) * 1000
+
+                event_started = time.perf_counter()
+
+                spill_present = spill_confidence is not None
+                spill_history.append(spill_present)
+
+                now = time.perf_counter()
+
+                spill_confirmed = (
+                    len(spill_history) == spill_history.maxlen
+                    and sum(spill_history) >= int(spill_config["confirmation_n"])
+                )
+
+                spill_cooldown_finished = (
+                    last_spill_event is None
+                    or now - last_spill_event >= float(spill_config["cooldown_sec"])
+                )
+
+                if spill_present and spill_confirmed and spill_cooldown_finished:
+                    x, y, box_width, box_height = cv2.boundingRect(spill_mask)
+
+                    event_engine.emit(
+                        data={
+                            "event_type": "spill_detected",
+                            "confidence": spill_confidence,
+                            "coordinates": {
+                                "x": (x + box_width / 2) / width,
+                                "y": (y + box_height / 2) / height,
+                                "bbox": [
+                                    x / width,
+                                    y / height,
+                                    (x + box_width) / width,
+                                    (y + box_height) / height,
+                                ],
+                            },
                         },
-                    },
-                    frame=evidence_frame,
+                        frame=evidence_frame,
+                    )
+
+                    last_spill_event = now
+                event_ms = (time.perf_counter() - event_started) * 1000
+                post_started = time.perf_counter()
+
+                ppe_results = check_ppe(
+                    people=detections,
+                    equipment=equipment,
+                    min_person_height=min_person_height,
+                    frame_height=height,
                 )
 
-                last_spill_event = now
-            event_ms = (time.perf_counter() - event_started) * 1000
-            post_started = time.perf_counter()
-
-            ppe_results = check_ppe(
-                people=detections,
-                equipment=equipment,
-                min_person_height=min_person_height,
-                frame_height=height,
-            )
-
-            polygon_px = polygon_to_pixels(
-                zone_polygon,
-                width,
-                height,
-            )
-
-            post_ms = (time.perf_counter() - post_started) * 1000
-            event_started = time.perf_counter()
-
-            # Собираем подтверждённые события.
-            pending_events = []
-            pending_events.extend(ppe_events.update(ppe_results))
-            pending_events.extend(zone_events.update(detections, polygon_px))
-            pending_events.extend(fire_events.update(fire_detections))
-
-            # Находим объект события по Track ID.
-            objects_by_id = {
-                obj.track_id: obj
-                for obj in detections
-                if obj.track_id is not None
-            }
-
-            for event in pending_events:
-                obj = event.get("object")
-
-                if obj is None:
-                    obj = objects_by_id.get(event.get("track_id"))
-
-                event_engine.emit(
-                    data=event,
-                    frame=evidence_frame,
-                    obj=obj,
+                polygon_px = polygon_to_pixels(
+                    zone_polygon,
+                    width,
+                    height,
                 )
 
-            event_ms += (time.perf_counter() - event_started) * 1000
+                post_ms = (time.perf_counter() - post_started) * 1000
+                event_started = time.perf_counter()
+
+                # Собираем подтверждённые события.
+                pending_events = []
+                pending_events.extend(ppe_events.update(ppe_results))
+                pending_events.extend(zone_events.update(detections, polygon_px))
+                pending_events.extend(fire_events.update(fire_detections))
+
+                # Находим объект события по Track ID.
+                objects_by_id = {
+                    obj.track_id: obj
+                    for obj in detections
+                    if obj.track_id is not None
+                }
+
+                for event in pending_events:
+                    obj = event.get("object")
+
+                    if obj is None:
+                        obj = objects_by_id.get(event.get("track_id"))
+
+                    event_engine.emit(
+                        data=event,
+                        frame=evidence_frame,
+                        obj=obj,
+                    )
+
+                event_ms += (time.perf_counter() - event_started) * 1000
+            else:
+                frames_until_inference -= 1
 
             overlay = frame.copy()
             overlay[spill_mask > 0] = (255, 0, 255)

@@ -1,6 +1,6 @@
 camera:
   id: cam_01
-  source: data/spill3.mp4
+  source: data/test1.mp4
   reconnect_sec: 2
 
 models:
@@ -9,6 +9,8 @@ models:
   imgsz: 640
   device: cpu
   classes: [0, 1, 2, 3, 5, 7]
+  # 1 — каждый кадр, 2 — через кадр.
+  inference_interval: 3
 
 zones:
   restricted_01:
@@ -36,7 +38,7 @@ ppe:
 
 fire_smoke:
   model_path: models/fire_smoke.pt
-  confidence: 0.40
+  confidence: 0.50
   imgsz: 640
   confirmation_n: 3
   confirmation_m: 5
@@ -51,7 +53,7 @@ fire_smoke:
 spill:
   enabled: true
   model_path: models/spill_yolo26n-seg_new.pt
-  confidence: 0.40
+  confidence: 0.50
   imgsz: 640
   confirmation_n: 3
   confirmation_m: 5
