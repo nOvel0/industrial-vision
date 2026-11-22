@@ -178,14 +178,15 @@ def main() -> None:
     )
 
     spill_config = config["spill"]
-
-    spill_enabled = spill_config.get("enabled", False)
-
-    spill_detector = SpillDetector(
-        polygon=spill_config["polygon"],
-        difference_threshold=int(spill_config["difference_threshold"]),
-        min_area_ratio=float(spill_config["min_area_ratio"]),
-    )
+    spill_detector = None
+    if spill_config.get("enabled", False):
+        spill_detector = SpillDetector(
+            model_path=PROJECT_ROOT / spill_config.get("model_path", "models/spill_yolo26n-seg.pt"),
+            confidence=float(spill_config.get("confidence", 0.25)),
+            imgsz=int(spill_config.get("imgsz", 640)),
+            device=str(model_config["device"]),
+            polygon=spill_config.get("polygon"),
+        )
 
     spill_history = deque(
         maxlen=int(spill_config["confirmation_m"])
@@ -282,7 +283,6 @@ def main() -> None:
                         zone_events.reset()
                         ppe_events.reset()
                         fire_events.reset()
-                        spill_detector.reset()
                         spill_history.clear()
                         last_spill_event = None
                         frame_number = 0
@@ -374,10 +374,11 @@ def main() -> None:
                         if point_in_polygon(center, fire_polygon_px):
                             fire_detections.append(detection)
 
-                if spill_enabled:
-                    spill_mask = spill_detector.predict(frame)
+                if spill_detector is not None:
+                    spill_mask, spill_confidence = spill_detector.predict(frame)
                 else:
                     spill_mask = np.zeros(frame.shape[:2], dtype=np.uint8)
+                    spill_confidence = None
                 equipment = []
 
                 for person in detections:
@@ -424,8 +425,7 @@ def main() -> None:
 
             event_started = time.perf_counter()
 
-            # разлив
-            spill_present = cv2.countNonZero(spill_mask) > 0
+            spill_present = spill_confidence is not None
             spill_history.append(spill_present)
 
             now = time.perf_counter()
@@ -446,6 +446,7 @@ def main() -> None:
                 event_engine.emit(
                     data={
                         "event_type": "spill_detected",
+                        "confidence": spill_confidence,
                         "coordinates": {
                             "x": (x + box_width / 2) / width,
                             "y": (y + box_height / 2) / height,
@@ -461,8 +462,6 @@ def main() -> None:
                 )
 
                 last_spill_event = now
-            #
-
             event_ms = (time.perf_counter() - event_started) * 1000
             post_started = time.perf_counter()
 
